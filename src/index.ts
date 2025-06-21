@@ -1,13 +1,14 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Ai } from "@cloudflare/ai";
 import { z } from "zod";
 
 // Define our MCP agent with tools
 export class MyMCP extends McpAgent {
-	server = new McpServer({
-		name: "Authless Calculator",
-		version: "1.0.0",
-	});
+        server = new McpServer({
+                name: "Authless Calculator and Translator",
+                version: "1.1.0",
+        });
 
 	async init() {
 		// Simple addition tool
@@ -20,13 +21,13 @@ export class MyMCP extends McpAgent {
 		);
 
 		// Calculator tool with multiple operations
-		this.server.tool(
-			"calculate",
-			{
-				operation: z.enum(["add", "subtract", "multiply", "divide"]),
-				a: z.number(),
-				b: z.number(),
-			},
+                this.server.tool(
+                        "calculate",
+                        {
+                                operation: z.enum(["add", "subtract", "multiply", "divide"]),
+                                a: z.number(),
+                                b: z.number(),
+                        },
 			async ({ operation, a, b }) => {
 				let result: number;
 				switch (operation) {
@@ -52,10 +53,53 @@ export class MyMCP extends McpAgent {
 						result = a / b;
 						break;
 				}
-				return { content: [{ type: "text", text: String(result) }] };
-			}
-		);
-	}
+                                return { content: [{ type: "text", text: String(result) }] };
+                        }
+                );
+
+                // Translate various document types to the target language
+                this.server.tool(
+                        "translate_document",
+                        {
+                                file: z.string(),
+                                filename: z.string(),
+                                targetLang: z.string(),
+                        },
+                        async ({ file, filename, targetLang }) => {
+                                // biome-ignore lint/suspicious/noExplicitAny: Workers AI binding lacks types
+                                const ai = new (Ai as any)((this as any).env.AI);
+                                const blob = new Blob([Buffer.from(file, "base64")]);
+                                // biome-ignore lint/suspicious/noExplicitAny: Workers AI binding lacks types
+                                const markdown = await (ai as any).toMarkdown({ name: filename, blob });
+
+                                let text = markdown.data;
+                                if (markdown.mimeType.startsWith("image/")) {
+                                        // biome-ignore lint/suspicious/noExplicitAny: Workers AI binding lacks types
+                                        const ocr = await (ai as any).run("@cf/llava-hf/llava-1.5-7b-hf", {
+                                                image: file,
+                                                prompt: "Extract all text from this image",
+                                        });
+                                        text = ocr.description;
+                                }
+
+                                // biome-ignore lint/suspicious/noExplicitAny: Workers AI binding lacks types
+                                const translated = await (ai as any).run("@cf/meta/m2m100-1.2b", {
+                                        text,
+                                        source_lang: "auto",
+                                        target_lang: targetLang,
+                                });
+
+                                return {
+                                        content: [
+                                                {
+                                                        type: "text",
+                                                        text: translated.translated_text || "",
+                                                },
+                                        ],
+                                };
+                        }
+                );
+        }
 }
 
 export default {
